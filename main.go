@@ -2,8 +2,10 @@ package main
 
 import (
 	"database/sql"
+	"flag"
 	"fmt"
 	"os"
+	"slices"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -23,7 +25,7 @@ const create string = `
 const DBfile string = "todos.db"
 
 type Todos struct {
-	db  *sql.DB
+	*sql.DB
 }
 
 type Todo struct {
@@ -39,16 +41,16 @@ func createDB() (*Todos, error) {
 	if _, err := db.Exec(create); err != nil {
 		return nil, err
 	}
-	return &Todos{db: db}, nil
+	return &Todos{db}, nil
 }
 
-func (c *Todos) flushDB() error {
-	_, err := c.db.Exec("DELETE FROM todos;")
+func (db *Todos) flushDB() error {
+	_, err := db.Exec("DELETE FROM todos;")
 	return err
 }
 
-func (c *Todos) Insert(task Todo) (int, error) {
-	res, err := c.db.Exec("INSERT INTO todos VALUES(NULL,?,?);", task.time, task.description)
+func (db *Todos) Insert(task Todo) (int, error) {
+	res, err := db.Exec("INSERT INTO todos VALUES(NULL,?,?);", task.time, task.description)
 	if err != nil {
 	 return 0, err
 	}
@@ -60,8 +62,8 @@ func (c *Todos) Insert(task Todo) (int, error) {
 	return int(id), nil
 }
 
-func (c *Todos) List() ([]Todo, error) {
-	rows, err := c.db.Query(`
+func (db *Todos) List() ([]Todo, error) {
+	rows, err := db.Query(`
     SELECT time, description 
     FROM todos`)
 	if err != nil {
@@ -79,14 +81,8 @@ func (c *Todos) List() ([]Todo, error) {
 	return tasks, nil
 }
 
-func (task Todo) Display() {
-	fmt.Printf("%s: %s\n", task.time.Format("01/02 03:04"), task.description)
-}
-
-func Display(tasks []Todo) {
-	for _, task := range tasks {
-		task.Display()
-	}
+func (task Todo) String() string {
+	return fmt.Sprintf("%s: %s\n", task.time.Format("01/02 03:04"), task.description)
 }
 
 func main() {
@@ -98,5 +94,13 @@ func main() {
 	}
 	todos.Insert(Todo{time.Now(), "task 1"})
 	todos.Insert(Todo{time.Now(), "task 2"})
-	Display(first(todos.List()))
+	fmt.Println(first(todos.List()))
+	subcommands := []string{"add","list","check","remove"}
+	for _, cmd := range subcommands {
+		flag.NewFlagSet(cmd, flag.ExitOnError)
+	}
+	if len(os.Args) < 2 || !slices.Contains(subcommands,os.Args[1]) {
+		fmt.Println("expected one subcommands of", subcommands)
+        os.Exit(1)
+	}
 }
