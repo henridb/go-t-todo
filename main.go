@@ -6,10 +6,30 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"strings"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 )
+
+var helpDoc = "Get help"
+
+var subcommandsDoc = map[string]string{
+	"add": "Add a new task",
+	"list": "List all tasks",
+	"check": "Check a task",
+	"remove": "Remove a task",
+	"help": helpDoc,
+}
+
+var subcommands = func() []string {
+	res := make([]string, 0, len(subcommandsDoc))
+	for cmd := range subcommandsDoc {
+		res = append(res, cmd)
+	}
+	return res
+}()
+
 
 func first[T, U any](val T, _ U) T {
     return val
@@ -19,7 +39,8 @@ const create string = `
   CREATE TABLE IF NOT EXISTS todos (
   id INTEGER NOT NULL PRIMARY KEY,
   time DATETIME NOT NULL,
-  description TEXT
+  description TEXT,
+  checked BOOLEAN DEFAULT false
   );`
 
 const DBfile string = "todos.db"
@@ -31,6 +52,7 @@ type Todos struct {
 type Todo struct {
 	time time.Time
 	description string
+	checked bool
 }
 
 func createDB() (*Todos, error) {
@@ -50,7 +72,7 @@ func (db *Todos) flushDB() error {
 }
 
 func (db *Todos) Insert(task Todo) (int, error) {
-	res, err := db.Exec("INSERT INTO todos VALUES(NULL,?,?);", task.time, task.description)
+	res, err := db.Exec("INSERT INTO todos VALUES(NULL,?,?,?);", task.time, task.description, task.checked)
 	if err != nil {
 	 return 0, err
 	}
@@ -62,10 +84,14 @@ func (db *Todos) Insert(task Todo) (int, error) {
 	return int(id), nil
 }
 
-func (db *Todos) List() ([]Todo, error) {
+func (db *Todos) List(filterUnchecked bool) ([]Todo, error) {
+	filter := ""
+	if filterUnchecked {
+		filter = " WHERE checked = 0"
+	}
 	rows, err := db.Query(`
-    SELECT time, description 
-    FROM todos`)
+    SELECT time, description, checked
+    FROM todos` + filter)
 	if err != nil {
 		return nil, err
 	}
@@ -73,7 +99,7 @@ func (db *Todos) List() ([]Todo, error) {
 	tasks := []Todo{}
  	for rows.Next() {
 		task := Todo{}
-		if err = rows.Scan(&task.time, &task.description); err != nil {
+		if err = rows.Scan(&task.time, &task.description, &task.checked); err != nil {
 			return nil, err
 		}
 		tasks = append(tasks, task)
@@ -82,25 +108,73 @@ func (db *Todos) List() ([]Todo, error) {
 }
 
 func (task Todo) String() string {
-	return fmt.Sprintf("%s: %s\n", task.time.Format("01/02 03:04"), task.description)
+	checked := "[ ] "
+	if task.checked {
+		checked = "[x] "
+	}
+	return fmt.Sprintf("%s%s: %s", checked, task.time.Format("01/02 03:04"), task.description)
 }
 
 func main() {
 	todos, err := createDB()
-	todos.flushDB()
 	if err != nil {
 		fmt.Println("Error!")
 		os.Exit(1)
 	}
-	todos.Insert(Todo{time.Now(), "task 1"})
-	todos.Insert(Todo{time.Now(), "task 2"})
-	fmt.Println(first(todos.List()))
-	subcommands := []string{"add","list","check","remove"}
+
+	// todos.flushDB()
+	// todos.Insert(Todo{time.Now(), "task 1", false})
+	// todos.Insert(Todo{time.Now(), "task 2", true})
+	// fmt.Println(first(todos.List()))
+	listUncheckedDoc := "Only display the tasks that are not checked"
+	h, hLong := flag.Bool("h", false, helpDoc), flag.Bool("help", false, helpDoc)
+	flagSets := map[string]*flag.FlagSet{}
 	for _, cmd := range subcommands {
-		flag.NewFlagSet(cmd, flag.ExitOnError)
+		flagSets[cmd] = flag.NewFlagSet(cmd, flag.ExitOnError)
+	}
+	u := flagSets["list"].Bool("u", false, listUncheckedDoc)
+	uLong := flagSets["list"].Bool("unchecked-only", false, listUncheckedDoc)
+	flag.Parse()
+
+	if *h || *hLong {
+		moduleDoc()
 	}
 	if len(os.Args) < 2 || !slices.Contains(subcommands,os.Args[1]) {
-		fmt.Println("expected one subcommands of", subcommands)
+		fmt.Print("Expected one subcommands of `", strings.Join(subcommands, "`, `"), "`\n")
         os.Exit(1)
 	}
+	switch os.Args[1] {
+	case "add":
+		todos.Insert(Todo{time.Now(), os.Args[2], false})
+	case "list":
+		listTasks(*u || *uLong, *todos)
+	case "check":
+	case "remove":
+	case "help":
+		moduleDoc()
+	default:
+		fmt.Println("This branch should be unreachable...")
+		os.Exit(1)
+	}
+}
+
+func listTasks(filterUnchecked bool, todos Todos) {
+	tasks, err := todos.List(filterUnchecked)
+	if err != nil {
+		fmt.Println("Err: ", err)
+		os.Exit(1)
+	}
+	for _, task := range tasks {
+		fmt.Println(task)
+	}
+	// fmt.Println(first(todos.List(filterUnchecked)))
+}
+
+func moduleDoc() {
+	fmt.Println("List of available subcommands:")
+
+	for cmd, doc := range subcommandsDoc {
+		print("  ", cmd, ": ", doc, "\n")
+	}
+	os.Exit(0)
 }
