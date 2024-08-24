@@ -17,11 +17,11 @@ import (
 var helpDoc = "Get help"
 
 var subcommandsDoc = map[string]string{
-	"add": "Add a new task",
-	"list": "List all tasks",
+	"add":    "Add a new task",
+	"list":   "List all tasks",
 	"toggle": "Toggle the check state of a task",
 	"remove": "Remove a task",
-	"help": helpDoc,
+	"help":   helpDoc,
 }
 
 var subcommands = func() []string {
@@ -33,10 +33,6 @@ var subcommands = func() []string {
 	return res
 }()
 
-func first[T, U any](val T, _ U) T {
-    return val
-}
-
 const create string = `
   CREATE TABLE IF NOT EXISTS todos (
   id INTEGER NOT NULL PRIMARY KEY,
@@ -47,15 +43,23 @@ const create string = `
 
 const DBfile string = "todos.db"
 
-type Todos struct {
-	*sql.DB
+type Todo struct {
+	time        time.Time
+	description string
+	checked     bool
+	id          int
 }
 
-type Todo struct {
-	time time.Time
-	description string
-	checked bool
-	id int
+func (task Todo) String() string {
+	checked := "[ ] "
+	if task.checked {
+		checked = "[x] "
+	}
+	return fmt.Sprintf("%s%s: %s", checked, task.time.Format("01/02 03:04"), task.description)
+}
+
+type Todos struct {
+	*sql.DB
 }
 
 func createDB() (*Todos, error) {
@@ -69,10 +73,10 @@ func createDB() (*Todos, error) {
 	return &Todos{db}, nil
 }
 
-func (db *Todos) flush() error {
-	_, err := db.Exec("DELETE FROM todos;")
-	return err
-}
+// func (db *Todos) flush() error {
+// 	_, err := db.Exec("DELETE FROM todos;")
+// 	return err
+// }
 
 func (db *Todos) insert(description string) error {
 	_, err := db.Exec("INSERT INTO todos VALUES(NULL,?,?,?);", time.Now(), description, false)
@@ -101,7 +105,7 @@ func (db *Todos) list(filterUnchecked bool) ([]Todo, error) {
 	}
 	defer rows.Close()
 	tasks := []Todo{}
- 	for rows.Next() {
+	for rows.Next() {
 		task := Todo{}
 		if err = rows.Scan(&task.time, &task.description, &task.checked, &task.id); err != nil {
 			return nil, err
@@ -123,16 +127,10 @@ func (db *Todos) execList(filterUnchecked bool) {
 	os.Exit(0)
 }
 
-func (db *Todos) toggleTask(id int) error {
-	_, err := db.Exec("UPDATE todos SET checked = NOT checked WHERE id = ?", id)
-	return err
-}
-
-func (db *Todos) execToggleTask() {
+func (db *Todos) selector() (int, []Todo, error) {
 	tasks, err := db.list(false)
 	if err != nil {
-		fmt.Println("Err: ", err)
-		os.Exit(1)
+		return 0, nil, err
 	}
 	maxIndexLen := int(math.Log10(float64(len(tasks))))
 
@@ -142,24 +140,48 @@ func (db *Todos) execToggleTask() {
 	}
 	var lineNb int
 	fmt.Scan(&lineNb)
-	
-	id := tasks[lineNb].id 
+
+	return lineNb, tasks, nil
+}
+
+func (db *Todos) toggleTask(id int) error {
+	_, err := db.Exec("UPDATE todos SET checked = NOT checked WHERE id = ?;", id)
+	return err
+}
+
+func (db *Todos) execToggleTask() {
+	taskIndex, tasks, err := db.selector()
+	if err != nil {
+		fmt.Println("Err: ", err)
+		os.Exit(1)
+	}
+	id := tasks[taskIndex].id
 	err = db.toggleTask(id)
 	if err != nil {
 		fmt.Println("Err: ", err)
 		os.Exit(1)
 	}
-	fmt.Print("Task '", tasks[lineNb].description, "' toggled\n")
+	fmt.Print("Task '", tasks[taskIndex].description, "' toggled\n")
 }
 
+func (db *Todos) delete(id int) error {
+	_, err := db.Exec("DELETE FROM todos WHERE id = ?;", id)
+	return err
+}
 
-
-func (task Todo) String() string {
-	checked := "[ ] "
-	if task.checked {
-		checked = "[x] "
+func (db *Todos) execDelete() {
+	taskIndex, tasks, err := db.selector()
+	if err != nil {
+		fmt.Println("Err: ", err)
+		os.Exit(1)
 	}
-	return fmt.Sprintf("%s%s: %s", checked, task.time.Format("01/02 03:04"), task.description)
+	id := tasks[taskIndex].id
+	err = db.delete(id)
+	if err != nil {
+		fmt.Println("Err: ", err)
+		os.Exit(1)
+	}
+	fmt.Print("Task '", tasks[taskIndex].description, "' deleted\n")
 }
 
 func main() {
@@ -186,16 +208,16 @@ func main() {
 	if mainHelp {
 		moduleDoc()
 	}
-	if len(os.Args) < 2 || !slices.Contains(subcommands,os.Args[1]) {
+	if len(os.Args) < 2 || !slices.Contains(subcommands, os.Args[1]) {
 		fmt.Print("Expected one subcommands of `", strings.Join(subcommands, "`, `"), "`\n")
-        os.Exit(1)
+		os.Exit(1)
 	}
 	for cmd, cmdHelp := range helps {
 		if *cmdHelp {
 			subcommandDoc(flagSets[cmd])
 		}
 	}
-	
+
 	todos, err := createDB()
 	if err != nil {
 		fmt.Println("Error initializing DB")
@@ -210,6 +232,7 @@ func main() {
 	case "toggle":
 		todos.execToggleTask()
 	case "remove":
+		todos.execDelete()
 	case "help":
 		moduleDoc()
 	default:
@@ -251,7 +274,6 @@ func parseAll(flagSets map[string]*flag.FlagSet) string {
 	flagSets[subcommand].Parse(os.Args[subcommandStartIndex+1:])
 	return subcommand
 }
-
 
 func moduleDoc() {
 	fmt.Println("CLI tool to manage your tasks.\nList of available subcommands:")
