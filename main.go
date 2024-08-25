@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fatih/color"
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -117,11 +118,11 @@ type Todo struct {
 }
 
 func (task Todo) String() string {
-	checked := "[ ] "
+	checked := " "
 	if task.checked {
-		checked = "[x] "
+		checked = "x"
 	}
-	return fmt.Sprintf("%s%s: %s", checked, task.time.Format("01/02 03:04"), task.description)
+	return fmt.Sprintf("  [%s]    %s     : %s", checked, task.time.Format("01/02"), task.description)
 }
 
 type Todos struct {
@@ -182,6 +183,10 @@ func (db *Todos) execList(filterUnchecked bool) {
 		fmt.Println("Err: ", err)
 		os.Exit(1)
 	}
+	bold := color.New(color.Bold)
+	underline := color.New(color.Underline, color.Bold)
+	underline.Println("            Tasks             ")
+	bold.Println("Checked  Due date  : Task")
 	for _, task := range tasks {
 		fmt.Println(task)
 	}
