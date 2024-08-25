@@ -6,15 +6,17 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 )
 
-// flag related things
+// flag related
 
 var helpDoc = "Get help"
 
@@ -95,7 +97,7 @@ func subcommandDoc(flagSet *flag.FlagSet) {
 	os.Exit(0)
 }
 
-// DB related things
+// DB related
 
 const create string = `
   CREATE TABLE IF NOT EXISTS todos (
@@ -136,11 +138,6 @@ func createDB() (*Todos, error) {
 	}
 	return &Todos{db}, nil
 }
-
-// func (db *Todos) flush() error {
-// 	_, err := db.Exec("DELETE FROM todos;")
-// 	return err
-// }
 
 func (db *Todos) insert(description string) error {
 	_, err := db.Exec("INSERT INTO todos VALUES(NULL,?,?,?);", time.Now(), description, false)
@@ -191,10 +188,10 @@ func (db *Todos) execList(filterUnchecked bool) {
 	os.Exit(0)
 }
 
-func (db *Todos) selector() (int, []Todo, error) {
+func (db *Todos) selector() ([]int, []Todo, error) {
 	tasks, err := db.list(false)
 	if err != nil {
-		return 0, nil, err
+		return nil, nil, err
 	}
 	maxIndexLen := int(math.Log10(float64(len(tasks))))
 
@@ -202,10 +199,75 @@ func (db *Todos) selector() (int, []Todo, error) {
 	for i, task := range tasks {
 		fmt.Printf("%*d) %s\n", maxIndexLen+1, i, task)
 	}
-	var lineNb int
-	fmt.Scan(&lineNb)
+	var lineNbsToParse string
+	fmt.Scan(&lineNbsToParse)
+	lineNbsToParse = strings.ReplaceAll(lineNbsToParse, " ", "")
 
-	return lineNb, tasks, nil
+	lineNbs := []int{}
+
+	r := regexp.MustCompile(`[^\s\d\-,]`)
+	if r.Find([]byte(lineNbsToParse)) != nil {
+		return nil, nil, fmt.Errorf("ranges should only contain indexes " +
+			"(numbers), range delimiters (commas) or range compositors (hyphens)")
+	}
+
+	r = regexp.MustCompile(`\d+`)
+	nbIndexes := r.FindAllIndex([]byte(lineNbsToParse), -1)
+	allNumbers := map[int]int{}
+	for _, tuple := range nbIndexes {
+		allNumbers[tuple[0]] = tuple[1]
+	}
+
+	var numberEnd, parsedInt int
+	var ok bool
+	rangeStart := 0
+	rangeEnd := len(tasks) - 1
+	rangeStarted := false
+
+	for index := 0; index < len(lineNbsToParse); index++ {
+		numberEnd, ok = allNumbers[index]
+		if ok {
+			parsedInt, err = strconv.Atoi(lineNbsToParse[index:numberEnd])
+			if err != nil {
+				return nil, nil, err
+			}
+			if rangeStarted {
+				rangeEnd = parsedInt
+			} else {
+				rangeStart = parsedInt
+			}
+			index = numberEnd - 1
+		} else if lineNbsToParse[index] == '-' {
+			if rangeStarted {
+				return nil, nil, fmt.Errorf("error cannot have several hyphens " +
+					"in a range (the input is a list of comma separated ranges)")
+			}
+			rangeStarted = true
+		} else if lineNbsToParse[index] == ',' {
+			if rangeStarted {
+				for lineNb := rangeStart; lineNb <= rangeEnd; lineNb++ {
+					lineNbs = append(lineNbs, lineNb)
+				}
+			} else {
+				lineNbs = append(lineNbs, rangeStart)
+			}
+			rangeStart = 0
+			rangeEnd = len(tasks) - 1
+			rangeStarted = false
+		}
+	}
+
+	if lineNbsToParse[len(lineNbsToParse)-1] != ',' {
+		if rangeStarted {
+			for lineNb := rangeStart; lineNb <= rangeEnd; lineNb++ {
+				lineNbs = append(lineNbs, lineNb)
+			}
+		} else {
+			lineNbs = append(lineNbs, rangeStart)
+		}
+	}
+
+	return lineNbs, tasks, nil
 }
 
 func (db *Todos) toggleTask(id int) error {
@@ -219,18 +281,21 @@ func (db *Todos) delete(id int) error {
 }
 
 func (db *Todos) selectAndExec(action func(int) error, completedDescriptor string) {
-	taskIndex, tasks, err := db.selector()
+	taskIndexes, tasks, err := db.selector()
 	if err != nil {
 		fmt.Println("Err: ", err)
 		os.Exit(1)
 	}
-	id := tasks[taskIndex].id
-	err = action(id)
-	if err != nil {
-		fmt.Println("Err: ", err)
-		os.Exit(1)
+	var id int
+	for _, taskIndex := range taskIndexes {
+		id = tasks[taskIndex].id
+		err = action(id)
+		if err != nil {
+			fmt.Println("Err: ", err)
+			os.Exit(1)
+		}
 	}
-	fmt.Print("Task '", tasks[taskIndex].description, "' ", completedDescriptor, "\n")
+	fmt.Println("Task(s)", taskIndexes, completedDescriptor)
 	os.Exit(0)
 }
 
@@ -284,7 +349,7 @@ func main() {
 	case "toggle":
 		todos.selectAndExec(todos.toggleTask, "toggled")
 	case "delete":
-		todos.selectAndExec(todos.delete, "toggled")
+		todos.selectAndExec(todos.delete, "deleted")
 	case "help":
 		moduleDoc()
 	default:
