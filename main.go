@@ -14,13 +14,15 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
+// flag related things
+
 var helpDoc = "Get help"
 
 var subcommandsDoc = map[string]string{
 	"add":    "Add a new task",
 	"list":   "List all tasks",
 	"toggle": "Toggle the check state of a task",
-	"remove": "Remove a task",
+	"delete": "Delete a task",
 	"help":   helpDoc,
 }
 
@@ -32,6 +34,68 @@ var subcommands = func() []string {
 	sort.Strings(res)
 	return res
 }()
+
+func shorthandedFlag[T bool](
+	fun func(*T, string, T, string),
+	v *T,
+	name string,
+	defaultV T,
+	description string,
+) {
+	fun(v, name, defaultV, description)
+	fun(v, string(name[0]), defaultV, fmt.Sprint("Shorthand for ```", name, "`"))
+}
+
+func parseAll(flagSets map[string]*flag.FlagSet) string {
+	flag.Parse()
+	var subcommand string
+	for cmd := range flagSets {
+		if slices.Contains(os.Args[1:], cmd) {
+			subcommand = cmd
+			break
+		}
+	}
+	if subcommand == "" {
+		return ""
+	}
+	var subcommandStartIndex int
+	for i := range os.Args {
+		if os.Args[i] == subcommand {
+			subcommandStartIndex = i
+			break
+		}
+	}
+	flagSets[subcommand].Parse(os.Args[subcommandStartIndex+1:])
+	return subcommand
+}
+
+func moduleDoc() {
+	fmt.Println("CLI tool to manage your tasks.\nList of available subcommands:")
+	maxCmdLen := 0
+	for _, cmd := range subcommands {
+		if len(cmd) > maxCmdLen {
+			maxCmdLen = len(cmd)
+		}
+	}
+	for _, cmd := range subcommands {
+		fmt.Printf("  %s%*s : %s\n", cmd, maxCmdLen-len(cmd), "", subcommandsDoc[cmd])
+	}
+	fmt.Println("\nList of available option:")
+	flag.PrintDefaults()
+	os.Exit(0)
+}
+
+func subcommandDoc(flagSet *flag.FlagSet) {
+	cmd := flagSet.Name()
+	fmt.Println(subcommandsDoc[cmd])
+	if flagSet.NFlag() != 0 {
+		fmt.Println("List of available options:")
+		flagSet.PrintDefaults()
+	}
+	os.Exit(0)
+}
+
+// DB related things
 
 const create string = `
   CREATE TABLE IF NOT EXISTS todos (
@@ -149,40 +213,28 @@ func (db *Todos) toggleTask(id int) error {
 	return err
 }
 
-func (db *Todos) execToggleTask() {
-	taskIndex, tasks, err := db.selector()
-	if err != nil {
-		fmt.Println("Err: ", err)
-		os.Exit(1)
-	}
-	id := tasks[taskIndex].id
-	err = db.toggleTask(id)
-	if err != nil {
-		fmt.Println("Err: ", err)
-		os.Exit(1)
-	}
-	fmt.Print("Task '", tasks[taskIndex].description, "' toggled\n")
-}
-
 func (db *Todos) delete(id int) error {
 	_, err := db.Exec("DELETE FROM todos WHERE id = ?;", id)
 	return err
 }
 
-func (db *Todos) execDelete() {
+func (db *Todos) selectAndExec(action func(int) error, completedDescriptor string) {
 	taskIndex, tasks, err := db.selector()
 	if err != nil {
 		fmt.Println("Err: ", err)
 		os.Exit(1)
 	}
 	id := tasks[taskIndex].id
-	err = db.delete(id)
+	err = action(id)
 	if err != nil {
 		fmt.Println("Err: ", err)
 		os.Exit(1)
 	}
-	fmt.Print("Task '", tasks[taskIndex].description, "' deleted\n")
+	fmt.Print("Task '", tasks[taskIndex].description, "' ", completedDescriptor, "\n")
+	os.Exit(0)
 }
+
+// end of utils
 
 func main() {
 	var mainHelp bool
@@ -230,73 +282,13 @@ func main() {
 	case "list":
 		todos.execList(uncheckedOnly)
 	case "toggle":
-		todos.execToggleTask()
-	case "remove":
-		todos.execDelete()
+		todos.selectAndExec(todos.toggleTask, "toggled")
+	case "delete":
+		todos.selectAndExec(todos.delete, "toggled")
 	case "help":
 		moduleDoc()
 	default:
 		fmt.Println("This branch should be unreachable...")
 		os.Exit(1)
 	}
-}
-
-func shorthandedFlag[T bool](
-	fun func(*T, string, T, string),
-	v *T,
-	name string,
-	defaultV T,
-	description string,
-) {
-	fun(v, name, defaultV, description)
-	fun(v, string(name[0]), defaultV, fmt.Sprint("Shorthand for ```", name, "`"))
-}
-
-func parseAll(flagSets map[string]*flag.FlagSet) string {
-	flag.Parse()
-	var subcommand string
-	for cmd := range flagSets {
-		if slices.Contains(os.Args[1:], cmd) {
-			subcommand = cmd
-			break
-		}
-	}
-	if subcommand == "" {
-		return ""
-	}
-	var subcommandStartIndex int
-	for i := range os.Args {
-		if os.Args[i] == subcommand {
-			subcommandStartIndex = i
-			break
-		}
-	}
-	flagSets[subcommand].Parse(os.Args[subcommandStartIndex+1:])
-	return subcommand
-}
-
-func moduleDoc() {
-	fmt.Println("CLI tool to manage your tasks.\nList of available subcommands:")
-	maxCmdLen := 0
-	for _, cmd := range subcommands {
-		if len(cmd) > maxCmdLen {
-			maxCmdLen = len(cmd)
-		}
-	}
-	for _, cmd := range subcommands {
-		fmt.Printf("  %s%*s : %s\n", cmd, maxCmdLen-len(cmd), "", subcommandsDoc[cmd])
-	}
-	fmt.Println("\nList of available option:")
-	flag.PrintDefaults()
-	os.Exit(0)
-}
-
-func subcommandDoc(flagSet *flag.FlagSet) {
-	cmd := flagSet.Name()
-	fmt.Println(subcommandsDoc[cmd])
-	if flagSet.NFlag() != 0 {
-		fmt.Println("List of available options:")
-		flagSet.PrintDefaults()
-	}
-	os.Exit(0)
 }
